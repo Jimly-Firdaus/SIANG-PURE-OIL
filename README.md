@@ -9,7 +9,7 @@ make clean
 ```
 
 ```bash
-make run
+make test
 ```
 
 ## Reference
