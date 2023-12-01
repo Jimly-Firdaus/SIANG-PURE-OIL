@@ -11,7 +11,7 @@ string ModeToString(CCMode mode) {
   switch (mode) {
     case SERIAL:                 return " Serial   ";
     case LOCKING_EXCLUSIVE_ONLY: return " Locking A";
-    case LOCKING:                return " Locking B";
+    case LOCKING:                return " 2PL      ";
     case OCC:                    return " OCC      ";
     case P_OCC:                  return " OCC-P    ";
     case MVCC:                   return " MVCC     ";
@@ -76,11 +76,9 @@ void Benchmark(const vector<LoadGen*>& lg) {
   int active_txns = 100;
   deque<Txn*> doneTxns;
 
-  // For each MODE...
-  for (CCMode mode = SERIAL;
-      mode <= MVCC;
-      mode = static_cast<CCMode>(mode+1)) {
-    // Print out mode name.
+  std::vector<CCMode> modes = {CCMode::LOCKING, CCMode::OCC};
+
+  for (CCMode mode : modes) {
     cout << ModeToString(mode) << flush;
 
     // For each experiment, run 3 times and get the average.
