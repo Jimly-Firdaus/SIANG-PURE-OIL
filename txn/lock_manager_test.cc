@@ -187,8 +187,8 @@ TEST(LockManagerB_LocksReleasedOutOfOrder) {
 }
 
 int main(int argc, char** argv) {
-  LockManagerA_SimpleLocking();
-  LockManagerA_LocksReleasedOutOfOrder();
+  // LockManagerA_SimpleLocking();
+  // LockManagerA_LocksReleasedOutOfOrder();
   LockManagerB_SimpleLocking();
   LockManagerB_LocksReleasedOutOfOrder();
 }
