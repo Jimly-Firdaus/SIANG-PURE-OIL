@@ -2,7 +2,7 @@
 // Lock manager implementing deterministic two-phase locking as described in
 // 'The Case for Determinism in Database Systems'.
 
-// Total wasted hours: 16
+// Total wasted hours: 29
 
 #include "txn/lock_manager.h"
 using namespace std;
@@ -40,27 +40,55 @@ LockManagerB::LockManagerB(deque<Txn*>* ready_txns) {
 }
 
 bool LockManagerB::WriteLock(Txn* txn, const Key& key) {
-  // cout << "REQUESTED WRITE LOOOOOOOCK" << endl;
-  //
-  // Implement this method!
-
-  // Write lock is EXCLUSIVE type lock
 
   // Check if the key exists in the lock table.
   if (lock_table_.find(key) != lock_table_.end()) {
-    // cout << "WAITING FOR XL" << endl;
-    // If the key is locked by any transaction (SHARED or EXCLUSIVE), enqueue the request and return false.
-    // if (!lock_table_[key]->empty()) {
-      // lock_table_[key]->push_back(LockRequest(EXCLUSIVE, txn));
-      unordered_map<Key, deque<LockRequest> *>::iterator pointer = lock_table_.find(key);
-      // Create a new lock then push it to lock table
-      LockRequest lock = LockRequest(EXCLUSIVE, txn);
-      deque<LockRequest> *lock_queue = pointer->second;
-      lock_queue->push_back(lock);
+    deque<LockRequest>* requests = lock_table_[key];
 
+    // Check if empty deque
+    if (!requests->empty()) {
+
+      // If the current transaction is requesting an Exclusive lock, has previously requested an Exclusive lock, and is at the front of the lock request queue, then return true.
+      LockRequest front = lock_table_[key]->front();
+      if (front.mode_ == EXCLUSIVE && front.txn_ == txn) {
+          return true;
+      }
+
+      // If previously already requested a Shared lock and is in front of the deque, check if eligible for upgrade
+      LockRequest& front_p = lock_table_[key]->front();
+      if (front_p.mode_ == SHARED && front_p.txn_ == txn) {
+          bool onlyThisTxn = true;
+          for (const auto& lr : *lock_table_[key]) {
+              if (lr.txn_ != txn) {
+                  onlyThisTxn = false;
+                  break;
+              }
+          }
+
+          // If the deque only contains this txn, upgrade to lock EXCLUSIVE
+          if (onlyThisTxn) {
+              front_p.mode_ = EXCLUSIVE;
+              return true;
+          }
+      }
+    }
+      
+    // If deque is empty then no need to wait and return true, false otherwise
+    bool emptyDeque = false;
+    if (requests->empty()) {
+      emptyDeque = true;
+    } else {
       txn_waits_[txn]++;
-      return false;
-    // }
+    }
+
+    // Create a new request for Exclusive lock
+    unordered_map<Key, deque<LockRequest> *>::iterator pointer = lock_table_.find(key);
+    // Create a new lock then push it to lock table
+    LockRequest lock = LockRequest(EXCLUSIVE, txn);
+    deque<LockRequest> *lock_queue = pointer->second;
+    lock_queue->push_back(lock);
+    
+    return emptyDeque;
   }
 
   // If the key is not in the lock table or is not locked, grant the lock.
@@ -68,25 +96,53 @@ bool LockManagerB::WriteLock(Txn* txn, const Key& key) {
   deque<LockRequest> *lock_queue = new deque<LockRequest>();
   lock_queue->push_back(*new_lock);
   lock_table_.insert({key, lock_queue});
-  // cout << "WRITE LOCK GRANTED" << endl;
   return true;
 }
 
 bool LockManagerB::ReadLock(Txn* txn, const Key& key) {
-  // Implement this method!
 
-  // unordered_map<Key, deque<LockRequest> *>::iterator pointer = lock_table_.find(key);
-
+  // Check if the key exists in the lock table.
   if (lock_table_.find(key) != lock_table_.end()) {
-      // find the queue lock for this key
+
+    // Check for empty deque
+    deque<LockRequest>* requests = lock_table_[key];
+    if (!requests->empty()) {
+
+      // If the current transaction is requesting an Shared lock, has previously requested an Exclusive lock, and is at the front of the lock request queue, then return true (use Exclusive lock to read).
+      LockRequest front = lock_table_[key]->front();
+      if (front.mode_ == EXCLUSIVE && front.txn_ == txn) {
+          return true;
+      }
+
+      bool is_last_exclusive = false;
+      // Find the queue lock for this key
+      unordered_map<Key, deque<LockRequest> *>::iterator pointer = lock_table_.find(key);
+      // Create a new lock then push it to lock table
+      LockRequest lock = LockRequest(SHARED, txn);
+      deque<LockRequest> *lock_queue = pointer->second;
+
+      // If there are any exclusive lock that are not requested by txn then txn must wait
+      for (const auto& el : *lock_queue) {
+          if (el.mode_ == EXCLUSIVE) {
+              is_last_exclusive = true;
+              txn_waits_[txn]++;
+              break;
+          }
+      }
+
+      lock_queue->push_back(lock);
+      return !is_last_exclusive;
+    } else {
+      // If empty deque
       unordered_map<Key, deque<LockRequest> *>::iterator pointer = lock_table_.find(key);
       // Create a new lock then push it to lock table
       LockRequest lock = LockRequest(SHARED, txn);
       deque<LockRequest> *lock_queue = pointer->second;
       lock_queue->push_back(lock);
 
-      txn_waits_[txn]++;
-      return false;
+      return true;
+    }
+      
   }
 
   // If the key is not in the lock table or is not locked exclusively by another transaction, grant the lock.
@@ -96,140 +152,140 @@ bool LockManagerB::ReadLock(Txn* txn, const Key& key) {
   lock_queue->push_back(*new_lock);
   lock_table_.insert({key, lock_queue});
   return true;
-
-
-
-  // // Single search in the map
-  // auto pointer = lock_table_.find(key);
-  // if (pointer != lock_table_.end()) {
-  //     // Create a new lock then push it to lock table
-  //     LockRequest lock = LockRequest(SHARED, txn);
-  //     pointer->second->push_back(lock);
-  //     txn_waits_[txn]++;
-  //     return false;
-  // }
-
-  // // If the key is not in the lock table or is not locked exclusively by another transaction, grant the lock.
-  // // Use smart pointers for automatic memory management
-  // auto new_lock = make_shared<LockRequest>(SHARED, txn);
-  // auto lock_queue = make_shared<deque<LockRequest>>();
-  // lock_queue->push_back(*new_lock);
-  // lock_table_.insert({key, lock_queue.get()});
-  // return true;
 }
 
 void LockManagerB::Release(Txn* txn, const Key& key) {
-  // Implement this method!
-  
   // Check if the key exists in the lock table.
   if (lock_table_.find(key) != lock_table_.end()) {
     deque<LockRequest>& requests = *lock_table_[key];
+    if (!requests.empty()) {
 
-    // Find the LockRequest for this transaction.
-    LockRequest* found_request = nullptr;
-    for (auto& request : requests) {
-        if (request.txn_ == txn) {
-            found_request = &request;
-            break;
-        }
-    }
-
-    // If the transaction has a lock or a pending request on the key, remove the LockRequest.
-    if (found_request != nullptr) {
-      bool wasShared = found_request->mode_ == SHARED;
-      for (auto it = requests.begin(); it != requests.end();) {
-        if (it->txn_ == found_request->txn_) {
-          it = requests.erase(it);
-          break;
-        } else {
-          ++it;
-        }
+      // Find the LockRequest for this txn
+      LockRequest* found_request = nullptr;
+      for (auto& request : requests) {
+          if (request.txn_ == txn) {
+              found_request = &request;
+              break;
+          }
       }
-      
-      // If the transaction was holding a lock and there are other transactions waiting for the lock,
-      // try to grant the lock to the next transaction(s) in the queue.
-      if (!requests.empty()) {
-        // If the next transaction requested an exclusive lock, grant it.
-        if (requests.front().mode_ == EXCLUSIVE) {
-          txn_waits_[requests.front().txn_]--;
-          ready_txns_->push_back(requests.front().txn_);
-        } else if (!wasShared) {
-          // If the released lock was exclusive lock, grant the shared lock to all transactions at the front of the deque
-          // that requested a shared lock.
-          for (const LockRequest& request : requests) {
-            if (request.mode_ == SHARED) {
-              txn_waits_[request.txn_]--;
-              if (txn_waits_[request.txn_] == 0) {
-                ready_txns_->push_back(request.txn_);
-                txn_waits_.erase(request.txn_);
+
+      // If txn has a lock or a pending request on the key, remove the LockRequest.
+      if (found_request != nullptr) {
+        bool wasShared = found_request->mode_ == SHARED;
+        bool lock_holder = requests.front().txn_ == txn;
+        int txn_index = 0;
+        for (auto it = requests.begin(); it != requests.end();) {
+          if (it->txn_ == found_request->txn_) {
+            it = requests.erase(it);
+            break;
+          } else {
+            ++it;
+            txn_index++;
+          }
+        }
+        
+        // If txn was holding a lock and there are other transactions waiting for the lock,
+        // try to grant the lock to the next transaction(s) in the queue.
+        if (!requests.empty() && lock_holder) { 
+          if (requests.front().mode_ == EXCLUSIVE) {
+
+            if (txn_waits_[requests.front().txn_] > 0) { // Extra safeguard
+              txn_waits_[requests.front().txn_]--;
+            }
+            bool found = false;
+            if (txn_waits_[requests.front().txn_] == 0) {
+              for (auto &ready_txn : *ready_txns_) {
+                if (ready_txn == requests.front().txn_) {
+                  found = true;
+                  break;
+                }
               }
-            } else {
+              if (!found) {
+                ready_txns_->push_back(requests.front().txn_);
+              }
+              if (txn_waits_.find(requests.front().txn_) != txn_waits_.end()) {
+                txn_waits_.erase(requests.front().txn_);
+              }
+            } 
+            
+          } 
+          // If txn was holding an Exclusive lock and its blocking the next txn that requested Shared lock, try to grant it
+          else if (!wasShared) { 
+            for (const LockRequest& request : requests) {
+              if (request.mode_ == SHARED) {
+
+                if (txn_waits_[request.txn_] > 0) { // Extra safeguard
+                  txn_waits_[request.txn_]--;
+                }
+                bool is_inside_ready_queue = false;
+                for (auto &ready_txn : *ready_txns_) {
+                  if (ready_txn == request.txn_) {
+                    is_inside_ready_queue = true;
+                    break;
+                  }
+                }
+                if (txn_waits_[request.txn_] == 0 && !is_inside_ready_queue) {
+                  ready_txns_->push_back(request.txn_);
+                  txn_waits_.erase(request.txn_);
+                }
+              } else {
+                break;
+              }
+            }
+          }
+        } 
+        // If txn requested an Exclusive lock that blocks the next txn that requested Shared lock, try to grant it
+        else if (!requests.empty() && !wasShared) {
+          int cnt = 0; 
+          for (const LockRequest& request : requests) {
+              if (request.mode_ == EXCLUSIVE && cnt >= txn_index) {
+                break;
+              }
+              if (request.mode_ == SHARED && cnt >= txn_index) {
+                if (txn_waits_[request.txn_] > 0) { // Extra safeguard
+                  txn_waits_[request.txn_]--;
+                }
+                bool is_inside_ready_queue = false;
+                for (auto &ready_txn : *ready_txns_) {
+                  if (ready_txn == request.txn_) {
+                    is_inside_ready_queue = true;
+                    break;
+                  }
+                }
+                if (txn_waits_[request.txn_] == 0 && !is_inside_ready_queue) {
+                  ready_txns_->push_back(request.txn_);
+                  txn_waits_.erase(request.txn_);
+                }
+              }
+              cnt++;
+            }
+        }
+
+        // Decrement the wait count for this transaction.
+        if (txn_waits_[txn] > 0) { // Extra safeguard
+          txn_waits_[txn]--;
+        }
+        bool found = false;
+        if (lock_holder && txn_waits_[txn] == 0) {
+          for (auto &ready_txn : *ready_txns_) {
+            if (ready_txn == txn) {
+              found = true;
               break;
             }
           }
+          if (!found) {
+            ready_txns_->push_back(txn);
+          }
+          if (txn_waits_.find(txn) != txn_waits_.end()) {
+            txn_waits_.erase(txn);
+          }
         }
       }
-
-      // Decrement the wait count for this transaction.
-      txn_waits_[txn]--;
     }
   }
 }
 
-// void LockManagerB::Release(Txn* txn, const Key& key) {
-//   // Check if the key exists in the lock table.
-//   if (lock_table_.find(key) != lock_table_.end()) {
-//     deque<LockRequest>* requests = lock_table_[key];
-
-//     // Find the LockRequest for this transaction.
-//     auto found_request = requests->end();
-//     for (auto it = requests->begin(); it != requests->end(); ++it) {
-//         if (it->txn_ == txn) {
-//             found_request = it;
-//             break;
-//         }
-//     }
-
-//     // If the transaction has a lock or a pending request on the key, remove the LockRequest.
-//     if (found_request != requests->end()) {
-//       bool wasShared = found_request->mode_ == SHARED;
-//       requests->erase(found_request);
-      
-//       // If the transaction was holding a lock and there are other transactions waiting for the lock,
-//       // try to grant the lock to the next transaction(s) in the queue.
-//       if (!requests->empty()) {
-//         // If the next transaction requested an exclusive lock, grant it.
-//         if (requests->front().mode_ == EXCLUSIVE) {
-//           txn_waits_[requests->front().txn_]--;
-//           ready_txns_->push_back(requests->front().txn_);
-//         } else if (!wasShared) {
-//           // If the released lock was exclusive lock, grant the shared lock to all transactions at the front of the deque
-//           // that requested a shared lock.
-//           for (const LockRequest& request : *requests) {
-//             if (request.mode_ == SHARED) {
-//               txn_waits_[request.txn_]--;
-//               if (txn_waits_[request.txn_] == 0) {
-//                 ready_txns_->push_back(request.txn_);
-//                 txn_waits_.erase(request.txn_);
-//               }
-//             } else {
-//               break;
-//             }
-//           }
-//         }
-//       }
-
-//       // Decrement the wait count for this transaction.
-//       txn_waits_[txn]--;
-//     }
-//   }
-// }
-
-
 LockMode LockManagerB::Status(const Key& key, vector<Txn*>* owners) {
-  //
-  // Implement this method!
-
   // Empty owners to reinit value
   owners->clear();
 
@@ -237,7 +293,7 @@ LockMode LockManagerB::Status(const Key& key, vector<Txn*>* owners) {
   if (lock_table_.find(key) != lock_table_.end()) {
     deque<LockRequest>& requests = *lock_table_[key];
 
-    // If there are no requests for the key, the lock is UNLOCKED.
+    // If there are no requests for the key, the lock is Unlocked.
     if (requests.empty()) {
       return UNLOCKED;
     }
@@ -246,7 +302,7 @@ LockMode LockManagerB::Status(const Key& key, vector<Txn*>* owners) {
     for (const LockRequest& request : requests) {
       owners->push_back(request.txn_);
 
-      // If we encounter a request for an EXCLUSIVE lock, no other transactions can hold the lock.
+      // If we encounter a request for an Exclusive lock, no other transactions can hold the lock.
       if (request.mode_ == EXCLUSIVE) {
         if (owners->size() > 1) {
           owners->pop_back();
@@ -258,7 +314,7 @@ LockMode LockManagerB::Status(const Key& key, vector<Txn*>* owners) {
     // Return the current LockMode of the lock.
     return requests.front().mode_;
   } else {
-    // If the key is not in the lock table, the lock is UNLOCKED.
+    // If the key is not in the lock table, the lock is Unlocked.
     return UNLOCKED;
   }
 }

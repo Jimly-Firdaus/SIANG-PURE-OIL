@@ -2,6 +2,7 @@
 #include "txn/txn_processor.h"
 #include <stdio.h>
 #include <set>
+using namespace std;
 
 #include "txn/lock_manager.h"
 
@@ -112,16 +113,19 @@ void TxnProcessor::RunLockingScheduler() {
     // Start processing the next incoming transaction request.
     if (txn_requests_.Pop(&txn)) {
       bool blocked = false;
-      // Request read locks.
+      // Request read locks.  
       for (set<Key>::iterator it = txn->readset_.begin();
            it != txn->readset_.end(); ++it) {
-        if (!lm_->ReadLock(txn, *it)) {
+            bool obtainedReadLock = lm_->ReadLock(txn, *it);
+        if (!obtainedReadLock) {
           blocked = true;
           // If readset_.size() + writeset_.size() > 1, and blocked, just abort
           if (txn->readset_.size() + txn->writeset_.size() > 1) {
             // Release all locks that already acquired
+            int i = 0;
             for (set<Key>::iterator it_reads = txn->readset_.begin(); true; ++it_reads) {
               lm_->Release(txn, *it_reads);
+              i++;
               if (it_reads == it) {
                 break;
               }
@@ -130,12 +134,12 @@ void TxnProcessor::RunLockingScheduler() {
           }
         }
       }
-          
-      if (blocked == false) {
+      if (blocked == false) { 
         // Request write locks.
         for (set<Key>::iterator it = txn->writeset_.begin();
              it != txn->writeset_.end(); ++it) {
-          if (!lm_->WriteLock(txn, *it)) {
+              bool obtainedWriteLock = lm_->WriteLock(txn, *it);
+          if (!obtainedWriteLock) {
             blocked = true;
             // If readset_.size() + writeset_.size() > 1, and blocked, just abort
             if (txn->readset_.size() + txn->writeset_.size() > 1) {
@@ -161,6 +165,13 @@ void TxnProcessor::RunLockingScheduler() {
       if (blocked == false) {
         ready_txns_.push_back(txn);
       } else if (blocked == true && (txn->writeset_.size() + txn->readset_.size() > 1)){
+        for (auto it = ready_txns_.begin(); it != ready_txns_.end();) {
+            if (*it == txn) {
+                it = ready_txns_.erase(it);
+            } else {
+                ++it;
+            }
+        }
         mutex_.Lock();
         txn->unique_id_ = next_unique_id_;
         next_unique_id_++;
@@ -177,11 +188,11 @@ void TxnProcessor::RunLockingScheduler() {
         txn->status_ = COMMITTED;
       } else if (txn->Status() == COMPLETED_A) {
         txn->status_ = ABORTED;
-      } else {
+      } 
+      else {
         // Invalid TxnStatus!
         DIE("Completed Txn has invalid TxnStatus: " << txn->Status());
       }
-      
       // Release read locks.
       for (set<Key>::iterator it = txn->readset_.begin();
            it != txn->readset_.end(); ++it) {
@@ -192,7 +203,13 @@ void TxnProcessor::RunLockingScheduler() {
            it != txn->writeset_.end(); ++it) {
         lm_->Release(txn, *it);
       }
-
+      for (auto it = ready_txns_.begin(); it != ready_txns_.end();) {
+          if (*it == txn) {
+              it = ready_txns_.erase(it);
+          } else {
+              ++it;
+          }
+      }
       // Return result to client.
       txn_results_.Push(txn);
     }
@@ -263,7 +280,7 @@ void TxnProcessor::RunOCCScheduler() {
 }
 
 void TxnProcessor::RunOCCParallelScheduler() {
-  //
+  // [IGNORE]
   // Implement this method! Note that implementing OCC with parallel
   // validation may need to create another method, like
   // TxnProcessor::ExecuteTxnParallel.
@@ -276,7 +293,7 @@ void TxnProcessor::RunOCCParallelScheduler() {
 }
 
 void TxnProcessor::RunMVCCScheduler() {
-  //
+  // [IGNORE]
   // Implement this method!
   
   // Hint:Pop a txn from txn_requests_, and pass it to a thread to execute. 
