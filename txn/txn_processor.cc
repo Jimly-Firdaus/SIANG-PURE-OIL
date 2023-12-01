@@ -259,7 +259,59 @@ void TxnProcessor::RunOCCScheduler() {
   // [For now, run serial scheduler in order to make it through the test
   // suite]
 
-  RunSerialScheduler();
+  // Run process until there is no active thread
+  while (this->tp_.Active()) {
+    Txn* txn;
+
+    // Pop transaction request from the request queue
+    if (this->txn_requests_.Pop(&txn)) {
+      // Store current time, will be used later to validate the transaction
+      txn->occ_start_time_ = GetTime();
+
+      // Create new task for this transaction
+      Task* task = new Method<TxnProcessor, void, Txn *>(this, &TxnProcessor::ExecuteTxn, txn);
+
+      // Run the task
+      this->tp_.RunTask(task);
+    }
+
+    // Validate completed transactions
+    while (this->completed_txns_.Pop(&txn)) {
+
+      // If the transaction is completed because of abortion
+      if (txn->Status() == COMPLETED_A) {
+        // Abort transaction
+        txn->status_ = ABORTED;
+
+        // Push the transaction to the result queue
+        this->txn_results_.Push(txn);
+
+        continue;
+      }
+
+      bool valid = true;
+      for (auto& read : txn->reads_) {
+        // If there is newer data that has been written and read by this transaction before the update, then this transaction is not valid
+        if (this->storage_->Timestamp(read.first) > txn->occ_start_time_) {
+          valid = false;
+          break;
+        }
+      }
+
+      if (valid) {
+        // If transaction valid, write and commit the transaction
+        ApplyWrites(txn);
+        txn->status_ = COMMITTED;
+        this->txn_results_.Push(txn);
+      } else {
+        // If transaction not valid, clear all the read-write processed by this transaction and requeue this transaction
+        txn->reads_.clear();
+        txn->writes_.clear();
+        txn->status_ = INCOMPLETE;
+        this->txn_requests_.Push(txn);
+      }
+    }
+  }
 }
 
 void TxnProcessor::RunOCCParallelScheduler() {
